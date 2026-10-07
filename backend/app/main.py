@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.v1.api import api_router
 from app.core.config import settings
@@ -35,14 +36,46 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+def _cors_origins() -> list[str]:
+    origins = list(settings.CORS_ORIGINS)
+    # Vercel preview + production deployments (*.vercel.app) must always be
+    # allowed, otherwise every frontend redeploy risks "Failed to fetch".
+    # Render env CORS_ORIGINS overrides code defaults, so enforce it in code.
+    for extra in (
+        "https://saas-auto-email-and-whatsappmsg.vercel.app",
+        "https://saas.ramyaai.tech",
+    ):
+        if extra not in origins:
+            origins.append(extra)
+    return origins
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=_cors_origins(),
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+
+@app.options("/{path:path}")
+async def cors_preflight(path: str, request: Request):
+    origin = request.headers.get("origin", "*")
+    return JSONResponse(
+        {},
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": request.headers.get(
+                "access-control-request-headers", "authorization, content-type"
+            ),
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Max-Age": "86400",
+        },
+    )
 
 app.include_router(api_router, prefix="/v1")
 
