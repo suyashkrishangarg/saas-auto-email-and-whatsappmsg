@@ -1,0 +1,54 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ca_saas
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  api:
+    build: ./backend
+    environment: &backend_env
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/ca_saas
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: change-me-in-prod
+      FERNET_KEY: change-me-in-prod-fernet-key
+      FRONTEND_URL: https://saas.ramyaai.tech
+      BACKEND_URL: https://api.ramyaai.tech
+      INBOUND_DOMAIN: inbound.ramyaai.tech
+      CORS_ORIGINS: '["https://saas.ramyaai.tech","http://localhost:3000"]'
+    ports: ["8000:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_started}
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  worker:
+    build: ./backend
+    environment: *backend_env
+    depends_on: [db, redis, api]
+    command: celery -A app.workers.celery_app.celery_app worker --loglevel=info -Q notices
+
+  migrate:
+    build: ./backend
+    environment: *backend_env
+    depends_on:
+      db: {condition: service_healthy}
+    command: alembic upgrade head
+    profiles: ["tools"]
+
+volumes:
+  pgdata:
