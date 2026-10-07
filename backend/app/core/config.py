@@ -23,7 +23,11 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "https://saas.ramyaai.tech"
     BACKEND_URL: str = "https://api.ramyaai.tech"
     INBOUND_DOMAIN: str = "inbound.ramyaai.tech"
-    CORS_ORIGINS: List[str] = ["https://saas.ramyaai.tech", "http://localhost:3000"]
+    CORS_ORIGINS: List[str] = [
+        "https://saas.ramyaai.tech",
+        "https://saas-auto-email-and-whatsappmsg.vercel.app",
+        "http://localhost:3000",
+    ]
 
     # Google OAuth (mailbox watch)
     GOOGLE_CLIENT_ID: str = ""

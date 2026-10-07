@@ -1,6 +1,17 @@
 "use client";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/v1";
+export function getApiBase(): string {
+  const v = (process.env.NEXT_PUBLIC_API_URL || "").trim();
+  if (v) return v.replace(/\/+$/, "");
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    // Same-apex convention: saas.<apex> -> api.<apex>
+    if (host.startsWith("saas.")) return `${window.location.protocol}//api.${host.slice(5)}/v1`;
+  }
+  return "http://localhost:8000/v1";
+}
+
+const API_URL = getApiBase();
 
 export type ApiError = { detail?: string | { msg: string }[] };
 
