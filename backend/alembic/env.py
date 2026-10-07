@@ -6,9 +6,10 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy.ext.asyncio import async_engine_from_config, create_async_engine
 
 from app.core.config import settings
+from app.core.database import prepare_engine_args
 from app.models import Base  # noqa: F401  (registers every model)
 
 config = context.config
@@ -37,10 +38,11 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_migrations_online() -> None:
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
+    # Build the engine ourselves so sslmode/channel_binding URL params from
+    # Neon-style providers are converted into a proper asyncpg SSLContext.
+    clean_url, connect_args = prepare_engine_args(settings.DATABASE_URL)
+    connectable = create_async_engine(
+        clean_url, connect_args=connect_args, poolclass=pool.NullPool
     )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
