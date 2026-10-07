@@ -82,6 +82,34 @@ cd frontend && npx next build         # production build, 11 routes
 
 ---
 
+## Production datastores — **free forever** (avoid Render's 30-day DBs)
+
+Render's free Postgres/Redis are **deleted after 30 days** (they're prototypes only).
+Use these instead — swap two env vars, zero code changes:
+
+| Piece | Service | Why |
+|---|---|---|
+| Postgres | **[Neon](https://neon.tech)** free | Serverless Postgres, persists forever, works with `asyncpg` |
+| Redis | **[Upstash](https://upstash.com)** free | Redis over TLS (`rediss://`), Celery-compatible, persists forever |
+| Frontend | **Vercel** free | Next.js native |
+| API | **Render** free web service | sleeps after 15 min → keep awake with `/health/db` ping |
+| Worker | **Railway (~$5/mo)** or **Render Starter ($7/mo)** or your own PC | a Celery worker must run 24/7 — no free tier runs it |
+
+**Setup:** create Neon DB → copy **pooled** connection string → set as `DATABASE_URL`
+(must contain `?sslmode=require`). Create Upstash DB → copy **TLS** URL → `REDIS_URL`.
+Move both into Render env vars. Render's own DB/Redis services: don't create them at all.
+
+> API URL form: `postgresql+asyncpg://user:pass@ep-xxx.aws.neon.tech/db?sslmode=require`
+> Redis URL form: `rediss://default:<password>@xxx.upstash.io:6379`
+
+**Keep everything warm:** add a free [UptimeRobot](https://uptimerobot.com) monitor hitting
+`https://api.ramyaai.tech/health/db` every 5 minutes — keeps the Render web instance and
+Neon compute awake (no cold starts). The new `/health/db` endpoint runs `SELECT 1` so the
+DB connection pool stays live.
+
+**Local development alternative:** `docker compose up --build` runs Postgres + Redis + API +
+worker entirely on your machine — Render databases are never needed locally.
+
 ## DNS for `saas.ramyaai.tech` (free, existing site untouched)
 
 | Record | Type | Name | Value |

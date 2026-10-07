@@ -3,11 +3,12 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.api import api_router
 from app.core.config import settings
+from app.core.database import get_db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -49,3 +50,18 @@ app.include_router(api_router, prefix="/v1")
 @app.get("/health")
 async def health():
     return {"ok": True, "service": "ca-notice-platform"}
+
+
+@app.get("/health/db")
+async def health_db(db=Depends(get_db)):
+    """Touches the database (SELECT 1).
+
+    Point your uptime monitor (UptimeRobot etc.) here every ~5 minutes to:
+      1. keep your Render free web service awake, and
+      2. keep the Neon/Supabase serverless Postgres compute from auto-suspending
+         (kills cold-start latency on the first real request).
+    """
+    from sqlalchemy import text
+
+    await db.execute(text("SELECT 1"))
+    return {"ok": True, "db": "up"}
