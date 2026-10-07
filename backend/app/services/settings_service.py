@@ -49,6 +49,20 @@ class SettingsService:
         await self.db.flush()
 
     # ---------- composite accessors ----------
+    @staticmethod
+    def _to_float(raw: str, default: float) -> float:
+        try:
+            return float(str(raw).strip())
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _to_int(raw: str, default: int) -> int:
+        try:
+            return int(float(str(raw).strip()))
+        except (TypeError, ValueError):
+            return default
+
     async def get_llm_config(self) -> Dict[str, Any]:
         provider = (await self.get("llm.provider")).strip().lower() or None
         model = (await self.get("llm.model")).strip() or None
@@ -56,11 +70,37 @@ class SettingsService:
         api_key = ""
         if provider:
             api_key = await self.get(f"llm.api_key.{provider}", "")
+            if provider == "custom" and not api_key.strip():
+                api_key = await self.get("llm.custom.api_key", "")
+        temperature = self._to_float(await self.get("llm.temperature", "0"), 0.0)
+        max_tokens = self._to_int(await self.get("llm.max_tokens", "1024"), 1024)
+        timeout_s = self._to_float(await self.get("llm.timeout_s", "60"), 60.0)
+        max_body_chars = self._to_int(await self.get("llm.max_body_chars", "12000"), 12000)
+        custom_base_url = (await self.get("llm.custom.base_url", "")).strip() or None
+        custom_model = (await self.get("llm.custom.model", "")).strip() or None
+        custom_extra_headers: Dict[str, str] = {}
+        raw_headers = (await self.get("llm.custom.extra_headers", "")).strip()
+        if raw_headers:
+            try:
+                import json as _json
+
+                parsed = _json.loads(raw_headers)
+                if isinstance(parsed, dict):
+                    custom_extra_headers = {str(k): str(v) for k, v in parsed.items()}
+            except Exception:  # noqa: BLE001
+                custom_extra_headers = {}
         return {
             "provider": provider,
             "model": model,
             "api_key": api_key,
             "system_prompt": system_prompt,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "timeout_s": timeout_s,
+            "max_body_chars": max_body_chars,
+            "custom_base_url": custom_base_url,
+            "custom_model": custom_model,
+            "custom_extra_headers": custom_extra_headers,
         }
 
     async def get_whatsapp_config(self) -> Dict[str, Any]:

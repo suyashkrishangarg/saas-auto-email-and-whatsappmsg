@@ -4,8 +4,9 @@ One request extracts everything: official-ness, GSTIN, notice form, FY, period,
 demand amount, due date and a 2-sentence summary. Provider is whatever the
 super-admin picked in the dynamic settings (no hard-coded default).
 
-Providers: openai | gemini | anthropic | groq - each uses its own HTTP endpoint
-via httpx to keep the dependency surface small.
+Providers: openai | gemini | anthropic | groq | custom - custom is any
+OpenAI-compatible endpoint (base_url + model id + optional key/headers),
+so Ollama / vLLM / Together / OpenRouter / Mistral etc. all work.
 """
 from __future__ import annotations
 
@@ -92,20 +93,67 @@ def _extract_json(text: str) -> Dict[str, Any]:
     return json.loads(text[start : end + 1])
 
 
-async def _chat_completions(provider: str, cfg: Dict[str, str], system: str, user: str) -> str:
-    """Generic OpenAI-compatible /chat/completions endpoint (openai + groq)."""
-    base = "https://api.openai.com/v1" if provider == "openai" else "https://api.groq.com/openai/v1"
-    async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
+def _generation_params(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        temperature = float(cfg.get("temperature", 0))
+    except (TypeError, ValueError):
+        temperature = 0.0
+    try:
+        max_tokens = int(float(cfg.get("max_tokens", 1024)))
+    except (TypeError, ValueError):
+        max_tokens = 1024
+    try:
+        timeout_s = float(cfg.get("timeout_s", LLM_TIMEOUT))
+    except (TypeError, ValueError):
+        timeout_s = LLM_TIMEOUT
+    try:
+        max_body_chars = int(float(cfg.get("max_body_chars", 12000)))
+    except (TypeError, ValueError):
+        max_body_chars = 12000
+    return {
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "timeout_s": timeout_s,
+        "max_body_chars": max_body_chars,
+    }
+
+
+async def _chat_completions(provider: str, cfg: Dict[str, Any], system: str, user: str) -> str:
+    """Generic OpenAI-compatible /chat/completions endpoint.
+
+    provider=openai -> api.openai.com, groq -> api.groq.com, custom -> the
+    admin-configured base_url (any OpenAI-compatible server).
+    """
+    params = _generation_params(cfg)
+    if provider == "openai":
+        base = "https://api.openai.com/v1"
+    elif provider == "groq":
+        base = "https://api.groq.com/openai/v1"
+    else:  # custom
+        base = (cfg.get("custom_base_url") or "").strip().rstrip("/")
+        if not base:
+            raise LLMError(
+                "Custom LLM selected but llm.custom.base_url is empty. "
+                "Set it in Admin > Settings (e.g. https://.../v1)."
+            )
+    headers: Dict[str, str] = {}
+    if cfg.get("api_key"):
+        headers["Authorization"] = f"Bearer {cfg['api_key']}"
+    for k, v in (cfg.get("custom_extra_headers") or {}).items():
+        if provider == "custom" and k:
+            headers[str(k)] = str(v)
+    async with httpx.AsyncClient(timeout=params["timeout_s"]) as client:
         resp = await client.post(
             f"{base}/chat/completions",
-            headers={"Authorization": f"Bearer {cfg['api_key']}"},
+            headers=headers,
             json={
                 "model": cfg["model"],
                 "messages": [
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                "temperature": 0,
+                "temperature": params["temperature"],
+                "max_tokens": params["max_tokens"],
                 "response_format": {"type": "json_object"},
             },
         )
@@ -115,19 +163,24 @@ async def _chat_completions(provider: str, cfg: Dict[str, str], system: str, use
         return data["choices"][0]["message"]["content"]
 
 
-async def _gemini(cfg: Dict[str, str], system: str, user: str) -> str:
+async def _gemini(cfg: Dict[str, Any], system: str, user: str) -> str:
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
         f"{cfg['model']}:generateContent"
     )
-    async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
+    params = _generation_params(cfg)
+    async with httpx.AsyncClient(timeout=params["timeout_s"]) as client:
         resp = await client.post(
             url,
             params={"key": cfg["api_key"]},
             json={
                 "system_instruction": {"parts": [{"text": system}]},
                 "contents": [{"role": "user", "parts": [{"text": user}]}],
-                "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
+                "generationConfig": {
+                    "temperature": params["temperature"],
+                    "maxOutputTokens": params["max_tokens"],
+                    "responseMimeType": "application/json",
+                },
             },
         )
         if resp.status_code >= 400:
@@ -136,8 +189,9 @@ async def _gemini(cfg: Dict[str, str], system: str, user: str) -> str:
         return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
-async def _anthropic(cfg: Dict[str, str], system: str, user: str) -> str:
-    async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
+async def _anthropic(cfg: Dict[str, Any], system: str, user: str) -> str:
+    params = _generation_params(cfg)
+    async with httpx.AsyncClient(timeout=params["timeout_s"]) as client:
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -147,10 +201,10 @@ async def _anthropic(cfg: Dict[str, str], system: str, user: str) -> str:
             },
             json={
                 "model": cfg["model"],
-                "max_tokens": 1024,
+                "max_tokens": params["max_tokens"],
                 "system": system,
                 "messages": [{"role": "user", "content": user}],
-                "temperature": 0,
+                "temperature": params["temperature"],
             },
         )
         if resp.status_code >= 400:
@@ -171,30 +225,45 @@ async def analyse_notice(
     provider = (cfg.get("provider") or "").strip().lower()
     model = (cfg.get("model") or "").strip()
     api_key = (cfg.get("api_key") or "").strip()
+    params = _generation_params(cfg)
 
-    if not provider or not model or not api_key:
+    if provider == "custom":
+        # Custom endpoint: model id lives in llm.custom.model (fallback: llm.model),
+        # key is optional (local Ollama/vLLM often needs none).
+        custom_model = (cfg.get("custom_model") or "").strip()
+        if custom_model:
+            model = custom_model
+        if not model:
+            raise LLMError(
+                "Custom LLM selected but no model id set. "
+                "Set llm.custom.model in Admin > Settings."
+            )
+        api_key = api_key  # may be empty for local servers - allowed
+
+    if not provider or not model or (not api_key and provider != "custom"):
         raise LLMError(
             "LLM is not configured. Super-admin must set provider, model and API key "
             "in Admin > Settings."
         )
 
     system = system_prompt_override or cfg.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
+    limit = params["max_body_chars"]
     user = (
-        f"SUBJECT:\n{subject}\n\nBODY:\n{body_text[:12000]}"
-        + (f"\n\nATTACHMENT:\n{attachment_text[:12000]}" if attachment_text else "")
+        f"SUBJECT:\n{subject}\n\nBODY:\n{body_text[:limit]}"
+        + (f"\n\nATTACHMENT:\n{attachment_text[:limit]}" if attachment_text else "")
         + f"\n\nReturn ONLY a JSON object matching exactly this shape:\n{SCHEMA_HINT}"
     )
     cfg = dict(cfg)
     cfg["model"] = model
 
-    if provider in ("openai", "groq"):
+    if provider in ("openai", "groq", "custom"):
         raw = await _chat_completions(provider, cfg, system, user)
     elif provider == "gemini":
         raw = await _gemini(cfg, system, user)
     elif provider == "anthropic":
         raw = await _anthropic(cfg, system, user)
     else:
-        raise LLMError(f"Unsupported LLM provider: {provider}")
+        raise LLMError(f"Unsupported LLM provider: {provider}. Use openai|gemini|anthropic|groq|custom.")
 
     return _coerce(_extract_json(raw))
 

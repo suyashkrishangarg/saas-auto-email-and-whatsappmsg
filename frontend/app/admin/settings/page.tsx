@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, SettingEntry } from "@/lib/api";
+import { DEFAULT_SYSTEM_PROMPT } from "@/lib/llm";
 
 const PROVIDERS = [
   { id: "openai", label: "OpenAI", models: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"] },
   { id: "gemini", label: "Google Gemini", models: ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"] },
   { id: "anthropic", label: "Anthropic", models: ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"] },
   { id: "groq", label: "Groq", models: ["llama-3.1-70b-versatile", "llama-3.1-8b-instant"] },
+  { id: "custom", label: "Custom (OpenAI-compatible)", models: [] },
 ];
 
 type Settings = Record<string, SettingEntry>;
@@ -175,18 +177,68 @@ export default function AdminSettingsPage() {
           <Field
             label={`llm.api_key.${provider || "openai"}`}
             secret
-            hint="Encrypted at rest. Switch provider above to edit that provider's key."
+            hint="Encrypted at rest. Switch provider above to edit that provider's key. Custom endpoint key is optional (leave empty for local Ollama/vLLM)."
           />
         </div>
 
+        {provider === "custom" && (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+            <h3 className="font-semibold">Custom OpenAI-compatible endpoint</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Works with Ollama, vLLM, Together, OpenRouter, Mistral La Plateforme, Azure
+              OpenAI, LocalAI — anything serving <code>/chat/completions</code>. Must be
+              reachable from the Render backend (public URL; localhost only works for local dev).
+            </p>
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <Field
+                label="llm.custom.base_url"
+                hint="e.g. https://openrouter.ai/api/v1 or http://localhost:11434/v1 (no trailing /chat/completions)"
+              />
+              <Field label="llm.custom.model" hint="Exact model id served by that endpoint" />
+              <Field label="llm.custom.api_key" secret hint="Alias of llm.api_key.custom. Empty = no Authorization header." />
+              <Field
+                label="llm.custom.extra_headers"
+                hint='Optional JSON, e.g. {"HTTP-Referer":"https://saas.ramyaai.tech","X-Title":"CA-SaaS"}'
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <h3 className="font-semibold">Generation tuning</h3>
+          <p className="mt-1 text-sm text-slate-600">
+            Applied to every provider including custom. Extraction defaults to temperature 0
+            for deterministic JSON.
+          </p>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <Field label="llm.temperature" hint="0 = deterministic extraction. Raise (0.3-0.7) only for friendlier summaries." />
+            <Field label="llm.max_tokens" hint="Max output tokens per call (default 1024)" />
+            <Field label="llm.timeout_s" hint="HTTP timeout per LLM call in seconds (default 60)" />
+            <Field label="llm.max_body_chars" hint="Email body chars sent to the model (default 12000)" />
+          </div>
+        </div>
+
         <div className="mt-4">
-          <label className="label">Custom system prompt</label>
+          <div className="mb-1 flex items-center justify-between">
+            <label className="label">System prompt</label>
+            <button
+              type="button"
+              className="text-xs font-medium text-brand-600 hover:underline"
+              onClick={() => setDraft((d) => ({ ...d, "llm.system_prompt": DEFAULT_SYSTEM_PROMPT }))}
+            >
+              Restore built-in default
+            </button>
+          </div>
           <textarea
             className="input min-h-[120px] font-mono text-xs"
             value={draft["llm.system_prompt"] ?? ""}
             onChange={(e) => setDraft((d) => ({ ...d, "llm.system_prompt": e.target.value }))}
-            placeholder="Leave empty to use the built-in GST notice prompt."
+            placeholder={DEFAULT_SYSTEM_PROMPT}
           />
+          <p className="mt-1 text-xs text-slate-500">
+            Empty = use the built-in GST notice prompt (shown as placeholder above). Your saved
+            text overrides it.
+          </p>
           <button
             className="btn-primary mt-2"
             onClick={() => void save("llm.system_prompt", false)}

@@ -27,13 +27,24 @@ class SystemSetting(Base):
 
 # Canonical keys seeded on startup
 DEFAULT_SETTINGS = {
-    "llm.provider": ("", False),          # openai | gemini | anthropic | groq
+    "llm.provider": ("", False),          # openai | gemini | anthropic | groq | custom
     "llm.model": ("", False),             # e.g. gpt-4o-mini, gemini-1.5-flash
     "llm.api_key.openai": ("", True),
     "llm.api_key.gemini": ("", True),
     "llm.api_key.anthropic": ("", True),
     "llm.api_key.groq": ("", True),
+    "llm.api_key.custom": ("", True),
     "llm.system_prompt": ("", False),
+    # Custom OpenAI-compatible endpoint (provider = custom)
+    "llm.custom.base_url": ("", False),   # e.g. https://xxx/v1 or http://localhost:11434/v1
+    "llm.custom.model": ("", False),      # model id served by the custom endpoint
+    "llm.custom.api_key": ("", True),     # use llm.api_key.custom (alias, same thing)
+    "llm.custom.extra_headers": ("", False),  # optional JSON object of extra HTTP headers
+    # Generation tuning (apply everywhere, incl. custom)
+    "llm.temperature": ("0", False),
+    "llm.max_tokens": ("1024", False),
+    "llm.timeout_s": ("60", False),
+    "llm.max_body_chars": ("12000", False),
     "whatsapp.meta.token": ("", True),
     "whatsapp.meta.phone_number_id": ("", False),
     "whatsapp.template.consultant": ("", False),
