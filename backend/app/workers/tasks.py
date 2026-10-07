@@ -78,36 +78,76 @@ def _headers_to_dict(payload: dict) -> dict:
 
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=30)
 def process_notice_email(self, payload: dict):
-    """Inbound-forwarding channel entrypoint (already has text body)."""
+    """Inbound-forwarding channel entrypoint (Celery mode; inline uses run_forwarding)."""
     try:
-        return asyncio.run(_handle_forwarding(payload))
+        return asyncio.run(run_forwarding(payload))
     except Exception as exc:  # noqa: BLE001
         logger.exception("process_notice_email failed")
         self.update_state(state="FAILED", meta={"error": str(exc)})
-        asyncio.run(_persist_failure(payload, str(exc)))
         return {"ok": False, "error": str(exc)}
 
 
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=30)
 def process_gmail_message(self, payload: dict):
-    """Gmail watch channel entrypoint: fetch newest message, then run pipeline."""
+    """Gmail watch channel entrypoint (Celery mode; inline uses run_gmail)."""
     try:
-        return asyncio.run(_handle_gmail(payload))
+        return asyncio.run(run_gmail(payload))
     except Exception as exc:  # noqa: BLE001
         logger.exception("process_gmail_message failed")
         self.update_state(state="FAILED", meta={"error": str(exc)})
-        asyncio.run(_persist_failure(payload, str(exc)))
         return {"ok": False, "error": str(exc)}
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def dispatch_mapped_client_alert(self, notice_id: str):
-    """Send the client WhatsApp after the consultant maps an unmatched notice."""
+    """Client WhatsApp after mapping (Celery mode; inline uses run_mapped_alert)."""
     try:
-        return asyncio.run(_send_client_after_map(UUID(notice_id)))
+        return asyncio.run(run_mapped_alert(notice_id))
     except Exception as exc:  # noqa: BLE001
         logger.exception("dispatch_mapped_client_alert failed")
         return {"ok": False, "error": str(exc)}
+
+
+# ------------------------------ inline runners -------------------------------
+# Same pipeline, no broker needed: called directly by FastAPI BackgroundTasks
+# in WORKER_MODE=inline (free tier default). Failures are persisted as FAILED
+# notices so nothing silently disappears.
+
+
+async def run_forwarding(payload: dict) -> dict:
+    """Inbound-forwarding pipeline with failure persistence."""
+    try:
+        return await _handle_forwarding(payload)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("run_forwarding failed")
+        await _persist_failure(payload, str(exc))
+        return {"ok": False, "error": str(exc)}
+
+
+async def run_gmail(payload: dict) -> dict:
+    """Gmail-watch pipeline with failure persistence."""
+    try:
+        return await _handle_gmail(payload)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("run_gmail failed")
+        await _persist_failure(payload, str(exc))
+        return {"ok": False, "error": str(exc)}
+
+
+async def run_mapped_alert(notice_id: str) -> dict:
+    """Post-mapping client WhatsApp dispatch."""
+    try:
+        return await _send_client_after_map(UUID(notice_id))
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("run_mapped_alert failed")
+        return {"ok": False, "error": str(exc)}
+
+
+RUNNERS = {
+    "process_notice_email": run_forwarding,
+    "process_gmail_message": run_gmail,
+    "dispatch_mapped_client_alert": run_mapped_alert,
+}
 
 
 # ------------------------------ handlers -----------------------------------

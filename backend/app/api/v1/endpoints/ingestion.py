@@ -14,7 +14,7 @@ import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, Header, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -82,7 +82,9 @@ def _parse_inbound_form(payload: dict) -> tuple[str, str, str, str, str]:
 
 
 @router.post("/inbound")
-async def inbound_email(request: Request, db: AsyncSession = Depends(get_db)):
+async def inbound_email(
+    request: Request, background: BackgroundTasks, db: AsyncSession = Depends(get_db)
+):
     """SendGrid Inbound Parse compatible handler (works for Postmark-style posts too)."""
     content_type = request.headers.get("content-type", "")
     if "application/json" in content_type:
@@ -108,9 +110,11 @@ async def inbound_email(request: Request, db: AsyncSession = Depends(get_db)):
         logger.warning("Inbound email for unknown alias: %s", first_recipient)
         return {"ok": True, "note": "alias not found - ignored"}
 
-    from app.workers.tasks import process_notice_email
+    from app.workers.runner import enqueue
 
-    process_notice_email.delay(
+    return enqueue(
+        background,
+        "process_notice_email",
         {
             "consultant_id": str(user.id),
             "subject": subject,
@@ -119,14 +123,14 @@ async def inbound_email(request: Request, db: AsyncSession = Depends(get_db)):
             "html": html,
             "source": "FORWARDING",
             "attachments": [],
-        }
+        },
     )
-    return {"ok": True, "queued": True}
 
 
 @router.post("/pubsub")
 async def pubsub_push(
     request: Request,
+    background: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     x_goog_verification_token: str | None = Header(default=None),
 ):
@@ -173,7 +177,8 @@ async def pubsub_push(
         cred.history_id = history_id or cred.history_id
         await db.flush()
 
-    from app.workers.tasks import process_gmail_message
+    from app.workers.runner import enqueue
 
-    process_gmail_message.delay({"consultant_id": str(user.id), "history_id": history_id})
-    return {"ok": True}
+    return enqueue(
+        background, "process_gmail_message", {"consultant_id": str(user.id), "history_id": history_id}
+    )

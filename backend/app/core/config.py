@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     FERNET_KEY: str = "dev-fernet-key-32-bytes-aaaaaaaaaa="
+    # Pipeline runner: inline (free default, runs inside web service)
+    # or celery (paid dedicated worker).
+    WORKER_MODE: str = "inline"
 
     # Public URLs (same apex domain, different subdomains)
     FRONTEND_URL: str = "https://saas.ramyaai.tech"

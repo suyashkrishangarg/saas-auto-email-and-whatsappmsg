@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,6 +54,7 @@ async def attention_inbox(
 async def map_to_client(
     notice_id: UUID,
     payload: MapNoticeIn,
+    background: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_consultant),
 ):
@@ -69,10 +70,10 @@ async def map_to_client(
     notice.status = NoticeStatus.PROCESSED
     await db.commit()
 
-    # Enqueue client alert (same pipeline task, lighter mode)
-    from app.workers.tasks import dispatch_mapped_client_alert
+    # Schedule client alert (inline BackgroundTasks on free tier, Celery if configured)
+    from app.workers.runner import enqueue
 
-    dispatch_mapped_client_alert.delay(str(notice.id))
+    enqueue(background, "dispatch_mapped_client_alert", str(notice.id))
     await db.refresh(notice)
     return notice
 
